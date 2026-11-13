@@ -17,7 +17,8 @@ env/
 .streamlit/secrets.toml
 
 # Data & vector stores (large / regenerable)
-data/
+data/*
+!data/processed/
 chroma_db/
 *.faiss
 *.parquet
@@ -26,3 +27,10 @@ chroma_db/
 .DS_Store
 .vscode/
 .idea/
+
+# Keys and certificates
+*.crt
+*.pem
+*.key
+*api_key*
+*-key.txt

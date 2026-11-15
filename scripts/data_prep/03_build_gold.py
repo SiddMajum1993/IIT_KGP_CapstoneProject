@@ -6,9 +6,8 @@ Three categories, as in the PRD:
                    gold_context_ids names that row, so Recall@3 can be scored without the LLM.
   * adversarial  - requests the system must refuse, plus control questions it must answer.
 
-Every row has an origin: "source" (verbatim from the datasets) or "authored" (written by the team, because
-no source covers jurisdiction maths or refusals). Jurisdiction rows have no context: the 2021 limits are not
-in either dataset and are applied by the Calculate_Jurisdiction tool.
+Jurisdiction rows have no context: the 2021 limits are not in either dataset and are applied by the
+Calculate_Jurisdiction tool.
 
 Output: data/processed/gold_qa.jsonl and gold_qa.csv (for the shared sheet).
 """
@@ -161,9 +160,9 @@ def main() -> None:
 
     gold = []
 
-    def add(category, subtype, question, answer, ids, expected_behavior="answer", note=None, origin="authored"):
+    def add(category, subtype, question, answer, ids, expected_behavior="answer", note=None):
         gold.append(dict(
-            id=f"G{len(gold) + 1:03d}", category=category, subtype=subtype, origin=origin, question=question,
+            id=f"G{len(gold) + 1:03d}", category=category, subtype=subtype, question=question,
             context=context_of(ids) if ids else "", answer=answer, gold_context_ids=ids,
             expected_behavior=expected_behavior, note=note,
         ))
@@ -180,7 +179,7 @@ def main() -> None:
     for i in FACT_IDS:
         context_of([i])  # asserts the id exists
         r = master[i]
-        add("fact", r["topic"], r["question"], r["answer"], [i], origin="source", note=r["note"])
+        add("fact", r["topic"], r["question"], r["answer"], [i], note=r["note"])
     for q, kind in ADVERSARIAL:
         if kind == "control_answer":
             a, ids = CONTROL[q]
@@ -199,11 +198,10 @@ def main() -> None:
         for g in gold:
             w.writerow({**g, "gold_context_ids": ";".join(g["gold_context_ids"])})
 
-    counts, origins = {}, {}
+    counts = {}
     for g in gold:
         counts[g["category"]] = counts.get(g["category"], 0) + 1
-        origins[g["origin"]] = origins.get(g["origin"], 0) + 1
-    print(f"wrote {len(gold)} gold rows {counts} {origins} -> {args.out}, {csv_path}")
+    print(f"wrote {len(gold)} gold rows {counts} -> {args.out}, {csv_path}")
 
 
 if __name__ == "__main__":

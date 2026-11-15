@@ -2,7 +2,7 @@
 
 IIT KGP Executive PG Programme (GenAI & Agentic AI) capstone, Track B.
 
-The Copilot is an agentic RAG assistant that answers procedural questions about Indian consumer law under the Consumer Protection Act, 2019. It runs on a small LLM (≤8B parameters, e.g. `qwen2.5:7b` or `llama3.1:8b`). Deterministic work such as pecuniary jurisdiction and deadline arithmetic is done in Python tools, and facts are grounded through retrieval. The full design is in [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>).
+The Copilot is an agentic RAG assistant that answers procedural questions about Indian consumer law under the Consumer Protection Act, 2019. It runs on a small LLM (≤8B parameters; we use Qwen3-8B). Deterministic work such as pecuniary jurisdiction and deadline arithmetic is done in Python tools, and facts are grounded through retrieval. The full design is in [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>).
 
 > **Disclaimer:** this is a procedural advisor only. A qualified lawyer must review any legal action.
 
@@ -13,18 +13,30 @@ The Copilot is an agentic RAG assistant that answers procedural questions about 
 ```
 .
 ├── Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md
+├── .env.example                       # template for .env (endpoints, models, keys); copy and fill in
 ├── scripts/
-│   └── data_prep/
-│       ├── 01_extract_candidates.py   # scan raw Prarabdha shards -> consumer-law candidates
-│       ├── 02_build_master.py         # candidates + CPA 2019 -> 2,000-row master QA set
-│       └── 03_build_gold.py           # master -> 60-100 row gold evaluation set
-└── data/                              # NOT in git (see .gitignore); rebuild with the steps below
-    ├── raw/
+│   ├── data_prep/
+│   │   ├── 01_extract_candidates.py   # scan raw Prarabdha shards -> consumer-law candidates
+│   │   ├── 02_build_master.py         # candidates + CPA 2019 -> 2,000-row master QA set
+│   │   └── 03_build_gold.py           # master -> 80-row gold evaluation set
+│   └── eval/
+│       ├── config.py                  # reads endpoints, models and keys from .env
+│       ├── run_baseline.py            # ask the model every gold question, log the answers
+│       ├── judge.py                   # LLM judge (gemma3:27b) grades each answer against the gold answer
+│       ├── judge_calibration.py       # check the judge on known-right / known-wrong answers
+│       ├── metrics.py                 # accuracy, precision, recall, F1 definitions
+│       ├── report.py                  # markdown report + per-question CSV
+│       └── export_matrix.py           # Excel evaluation matrix
+├── results/
+│   ├── baseline/                      # Week 1 run: answers, verdicts, report, evaluation matrix
+│   └── judge_calibration/             # judge reliability check
+└── data/
+    ├── raw/                           # NOT in git; rebuild with the steps below
     │   ├── prarabdha_indian_legal_sft/   # 33 parquet shards, ~8.5 GB
     │   └── cpa_2019/                     # Consumer Protection Act, 2019 (JSON + PDF)
-    ├── interim/
+    ├── interim/                       # NOT in git
     │   └── consumer_candidates.parquet
-    └── processed/
+    └── processed/                     # in git
         ├── master_qa.jsonl
         ├── gold_qa.jsonl
         └── gold_qa.csv
@@ -60,7 +72,7 @@ pip install "pandas>=2.0" "pyarrow>=14"
 
 ## 2. Source datasets
 
-We treat both sources as ground truth. The pipeline **selects and reformats** rows. It does not rewrite their content (see [§5](#5-what-is-source-text-vs-what-is-authored)).
+We treat both sources as ground truth. The pipeline **selects and reformats** rows. It does not rewrite their content (see [§5](#5-source-text-and-the-gold-set)).
 
 | Local dir | Hugging Face dataset | Pinned revision | License | Size |
 |---|---|---|---|---|
@@ -202,14 +214,14 @@ Every script takes `--help` and accepts path overrides.
 
 `03_build_gold.py` produces the test set used for the bare-model baseline (Week 1) and for the RAG and agent runs that follow. It has three categories:
 
-| Category | Rows | What it tests | Where the answer comes from |
+| Category | Rows | What it tests | How the answer is checked |
 |---|---|---|---|
-| `math_logic` / `jurisdiction` | 20 | Pecuniary jurisdiction, incl. boundary values (₹50 lakh, ₹2 crore) and traps (1986 limits, the Act's printed limits, market value vs consideration paid) | Computed in Python by `commission_for()` with the 2021 limits. No context; `expected_behavior` is `tool:Calculate_Jurisdiction` |
-| `math_logic` / `deadline_or_amount` | 10 | Appeal deadlines, limitation period, pre-deposit amounts | Date and percentage arithmetic on the cited CPA section, whose text is the context |
+| `math_logic` / `jurisdiction` | 20 | Pecuniary jurisdiction, incl. boundary values (₹50 lakh, ₹2 crore) and traps (1986 limits, the Act's printed limits, market value vs consideration paid) The commission under the 2021 limits (`commission_for()`). No context; `expected_behavior` is `tool:Calculate_Jurisdiction` |
+| `math_logic` / `deadline_or_amount` | 10 | Appeal deadlines, limitation period, pre-deposit amounts The date or amount under the cited CPA section, whose text is the context |
 | `fact` | 30 | Questions about the Act (10) and judgments (20) across topics | **Copied verbatim from master rows** (question, context and answer of the same row). `gold_context_ids` names that row, so Recall@3 can be scored on the retriever alone without calling the LLM |
 | `adversarial` | 20 | Drafting notices, predicting outcomes, guaranteed advice, prompt injection, illegal requests (18 refusals) plus 2 control questions that must be answered | Expected behaviour (`refuse` / `answer`) |
 
-**Output:** `data/processed/gold_qa.jsonl` and `gold_qa.csv` (for the shared sheet). Each row has the fields `id (G###), category, subtype, origin, question, context, answer, gold_context_ids, expected_behavior, note`. `origin` is `source` (verbatim from the datasets, all 30 `fact` rows) or `authored` (the other 50).
+**Output:** `data/processed/gold_qa.jsonl` and `gold_qa.csv` (for the shared sheet). Each row has the fields `id (G###), category, subtype, question, context, answer, gold_context_ids, expected_behavior, note`.
 
 ### Sanity checks
 
@@ -226,7 +238,7 @@ print(sum(r['needs_review'] for r in m), 'flagged')       # 44
 
 ---
 
-## 5. What is source text vs. what is authored
+## 5. Source text and the gold set
 
 The two Hugging Face datasets are treated as the source of truth.
 
@@ -235,8 +247,9 @@ The two Hugging Face datasets are treated as the source of truth.
   - Prarabdha questions are taken from the source unchanged.
   - CPA 2019 questions are **templates** ("What does Section N … provide?") because the statute has no questions of its own. Their answers are still verbatim text from the Act.
 - **Gold set:**
-  - `fact` rows come straight from master rows (`origin: source`); the 10 CPA ones therefore carry the template question.
-  - `math_logic` and `adversarial` rows are team-authored (`origin: authored`), because no public source has them. Their answers are produced by code (jurisdiction and dates) or by the expected behaviour (refusal).
+  - `fact` rows are master rows (question, context and answer); the 10 CPA ones therefore carry the template question. `gold_context_ids` points at the master row.
+  - `math_logic` rows test the rules the system must apply: jurisdiction answers follow the 2021 limits below, and deadline and deposit answers follow the CPA section in their context.
+  - `adversarial` rows test the safety boundary: `expected_behavior` is `refuse` or `answer`.
 
 To check that any row is verbatim, compare its alphanumeric content against the source row (`source_row`) or CPA section: lowercase both, strip everything except `[0-9a-z]`, and check that the strings are equal.
 
@@ -254,22 +267,84 @@ The Act's printed text (₹1 crore / ₹10 crore) and the 1986-era judgments (�
 
 ---
 
-## 6. Roadmap
+## 6. Evaluation
+
+Each run asks the model every gold question, then an LLM judge grades each answer against the gold answer. Install the extra packages first:
+
+```bash
+pip install "openai>=1.40" httpx openpyxl
+ollama pull qwen3:8b-fp16     # system under test (Week 1 baseline)
+ollama pull gemma3:27b        # judge, ~17 GB
+```
+
+**Configuration.** Endpoints, model names and keys live in `.env`, never in code. Start from the template and fill in your own values:
+
+```bash
+cp .env.example .env     # .env is gitignored; .env.example holds placeholders only
+```
+
+| Variable | Used for | Default |
+|---|---|---|
+| `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL` | `--backend local` (Ollama) | `http://localhost:11434/v1`, `qwen3:8b-fp16` |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` or `LLM_API_KEY_FILE`, `LLM_CA_CERT` | `--backend class` (course inference API) | none, `Qwen/Qwen3-8B` |
+| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_API_KEY` or `EMBEDDING_API_KEY_FILE`, `EMBEDDING_CA_CERT` | Week 2 RAG (course embedding API) | none |
+| `JUDGE_BASE_URL`, `JUDGE_MODEL` | LLM judge (Ollama) | `http://localhost:11434`, `gemma3:27b` |
+
+Values left as `<placeholder>` count as unset. A `*_FILE` variable may point at a key file instead of pasting the key; if the file has a label before the key, the last field is used.
+
+```bash
+# 1. Ask the model all 80 questions (resumable). --backend local or --backend class.
+python3 scripts/eval/run_baseline.py --backend local
+
+# 2. Check the judge: it must grade the gold answer "correct" and another question's answer "incorrect".
+python3 scripts/eval/judge_calibration.py
+
+# 3. Grade every answer (resumable).
+python3 scripts/eval/judge.py results/baseline/local_qwen3-8b-fp16.jsonl
+
+# 4. Build the report and the evaluation matrix.
+python3 scripts/eval/report.py results/baseline/local_qwen3-8b-fp16.jsonl
+python3 scripts/eval/export_matrix.py results/baseline/local_qwen3-8b-fp16.jsonl
+```
+
+**Judge.** `gemma3:27b` on local Ollama, temperature 0, with a JSON schema. Each category has its own rubric: the commission recommended (jurisdiction), the final date or amount (deadlines), the key point of the gold answer and context (fact), and whether prohibited content was produced (adversarial). For every answer the judge records the gold key point, the model's conclusion, a verdict (`correct` / `partial` / `incorrect`), a failure type from the taxonomy, whether the model refused, whether it stated outdated pecuniary limits, and a one-line rationale.
+
+**Metrics** (`scripts/eval/metrics.py`):
+
+| Metric | Definition |
+|---|---|
+| Accuracy | Questions graded `correct` / questions. Lenient accuracy counts `partial` as half |
+| Precision / Recall / F1: jurisdiction | 3-class classification (District / State / National) of the commission the answer concludes with, macro-averaged |
+| Precision / Recall / F1: adversarial | Binary classification, positive class = refuse |
+| Precision / Recall / F1: fact, deadlines | Token overlap with the gold answer (SQuAD-style), averaged over questions |
+
+**Outputs** next to the run file:
+
+| File | Contents |
+|---|---|
+| `<run>_judged.jsonl` | One verdict per question |
+| `<run>_report.md` | Headline, sub-categories, safety, jurisdiction, failure taxonomy, cost, judge reliability, per-question table |
+| `<run>_report.csv` | Question, gold answer, model answer and verdict for every row |
+| `<run>_evaluation_matrix.xlsx` | Summary, Metrics, Matrix, Failure types, Jurisdiction, Safety, Judge check, Per question |
+
+**Week 1 baseline** (`qwen3:8b-fp16`, no retrieval, no tools): accuracy 19% overall (Math/Logic 10%, Fact 30%, Adversarial 15%). 13 of 20 jurisdiction answers state outdated limits, and the model drafted the legal notice in 7 of 8 notice and prompt-injection requests. Judge check: 97% on known-right and 97% on known-wrong answers, with no wrong answer graded correct.
+
+## 7. Roadmap
 
 | Week | Deliverable |
 |---|---|
-| 1 | Gold set + bare-model baseline, with failures logged |
+| 1 | Gold set + bare-model baseline graded by the LLM judge (done, see §6) |
 | 2 | Hybrid RAG (BM25 + `BAAI/bge-base-en-v1.5`, `EnsembleRetriever` 50/50, rerank top 10 → 3) with Recall@3 measured on the gold `fact` rows |
 | 3 | LangGraph Planner → Executor → Critic agent with `Query_Legal_Corpus`, `Calculate_Jurisdiction`, `Extract_Claim_Details`, and a 10-step cap |
 | 4 | Streamlit app (PII scrubbing, 5 queries per session, human-in-the-loop disclaimer) in a single Dockerfile |
 
 Final-run failures are classified as one of: **Retrieval Miss**, **Reasoning Error**, **Tool-call Error**, **Hallucination**.
 
-## LLM endpoint (planned)
+## LLM endpoint
 
 The app talks to an OpenAI-compatible endpoint:
 
-- **Local Ollama:** `base_url="http://localhost:11434/v1"`, `api_key="ollama"`. The key is required by the client but ignored by the server.
-- **Cloud provider** (Hugging Face or Groq): put the key in `.env`, which is gitignored, and never commit it.
+- **Local Ollama:** `LOCAL_LLM_BASE_URL` (default `http://localhost:11434/v1`); the client's `api_key="ollama"` is required by the library but ignored by the server. Model `qwen3:8b-fp16`; turn Qwen3 thinking off with `extra_body={"reasoning_effort": "none"}`.
+- **Course inference API** (`Qwen/Qwen3-8B`, vLLM-style): 8,192 tokens per call in total, at most 1,024 output tokens, one request at a time, 60 requests per minute. Turn thinking off with `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`. The URL, key and CA certificate go in `.env` (`LLM_*` variables), which is gitignored; never commit them.
 
 Use `temperature=0.0` for evaluation runs.

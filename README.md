@@ -348,3 +348,44 @@ The app talks to an OpenAI-compatible endpoint:
 - **Course inference API** (`Qwen/Qwen3-8B`, vLLM-style): 8,192 tokens per call in total, at most 1,024 output tokens, one request at a time, 60 requests per minute. Turn thinking off with `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`. The URL, key and CA certificate go in `.env` (`LLM_*` variables), which is gitignored; never commit them.
 
 Use `temperature=0.0` for evaluation runs.
+
+## 8. Week 2: Hybrid RAG and Recall@3
+
+The retrieval pipeline uses the processed 2,000-row master QA set and the
+30 fact questions in the gold set. It compares 500-token and 1,000-token chunks
+with a 100-token overlap, indexes each experiment in persistent Chroma, combines
+dense retrieval with BM25 at equal weights, and reranks the top 10 candidates
+to return the top 3.
+
+Week 2 requires Python 3.10 or newer. Install its optional dependencies from
+the repository root:
+
+```powershell
+py -m pip install -r requirements-rag.txt
+```
+
+By default, the pipeline uses the Hugging Face `BAAI/bge-base-en-v1.5`
+embedding model and `BAAI/bge-reranker-base` cross-encoder. To use the course
+embedding API instead, copy `.env.example` to `.env` and set
+`EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and either `EMBEDDING_API_KEY` or
+`EMBEDDING_API_KEY_FILE`. Set `EMBEDDING_CA_CERT` to the CA certificate path
+when the endpoint requires it. Keep keys and certificates out of source
+control; `.env` and certificate/key files are gitignored.
+
+Run the chunk-size comparison and Recall@3 evaluation from the repository root:
+
+```powershell
+py scripts/rag/run_recall.py
+```
+
+To require the configured API embeddings explicitly:
+
+```powershell
+py scripts/rag/run_recall.py --embedding-backend api
+```
+
+The first run downloads the configured embedding and reranker models (unless
+the API embedding backend is selected) and creates local indexes under
+`chroma_db/`. The script can resume indexing missing chunks; use
+`--rebuild-index` to replace the experiment collections. It writes the
+per-query results and summary to `results/rag/`.

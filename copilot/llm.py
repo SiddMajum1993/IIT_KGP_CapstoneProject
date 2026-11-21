@@ -56,3 +56,13 @@ def chat(client: OpenAI, model: str, extra_body: dict, messages: list) -> dict:
                     completion_tokens=r.usage.completion_tokens if r.usage else None,
                     finish_reason=r.choices[0].finish_reason)
     return dict(answer=None, error=error, attempts=attempt + 1)
+
+
+def stream(client: OpenAI, model: str, extra_body: dict, messages: list):
+    """Same request as chat(), but yields the answer piece by piece (for the chat UI; no retries)."""
+    r = client.chat.completions.create(model=model, messages=messages, temperature=config.TEMPERATURE,
+                                       seed=config.SEED, max_tokens=config.MAX_TOKENS, extra_body=extra_body,
+                                       stream=True)
+    for chunk in r:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content

@@ -10,8 +10,11 @@ This document outlines the complete scope, technical requirements, and step-by-s
 | :---- | :---- | :---- |
 | 1.0 | Nov 2026 | Initial PRD. |
 | 1.1 | 15 Nov 2026 | Week 1 completed. Updated to the decisions taken: LLM is Qwen3-8B; RAG corpus built from two Hugging Face datasets as a 2,000-row Question / Context / Answer master set (mentor requirement); 80-question gold set kept in the repo; baseline graded by an LLM judge (gemma3:27b) with Accuracy, Precision, Recall and F1. Changed sections: 2, 3 (Steps 1–4), 4 (Step 5), 6 (Step 2). |
+| 1.2 | 21 Nov 2026 | Scope set by the mentor on 20 Nov: RAG only (no agent layer), compared over 3 prompt styles (zero-shot, few-shot, chain-of-thought) × without / with RAG. Judge v2 is not told the question type: it identifies the type, then grades; its type accuracy is reported. ROUGE-1/2/L and exact match added as a first metric layer. Streamlit chat UI kept. Changed sections: 1, 2, 3 (Step 5), 4 (Steps 1–5, new Steps 6–7), 5, 6. |
 
 ## **1\. Project Overview & Architecture**
+
+> **Scope (v1.2, agreed with the mentor on 20 Nov 2026):** the deliverable is a RAG system evaluated as a 3 × 2 grid: three prompt styles (zero-shot, few-shot, chain-of-thought), each without and with RAG, on the 80-question gold set. The agent layer of Section 5 (tools, LangGraph Planner–Executor–Critic) is out of scope; Section 5 is kept for reference. Jurisdiction and refusal are handled through retrieval and prompting, and the evaluation measures how far that gets an 8B model.
 
 The goal is to build an agentic system powered by a highly constrained language model (8B parameters or less). Small models struggle with math, precise logic, and internal memory. Instead of forcing the model to "know" Indian law, we will build a system that forces the model to use external tools to do the heavy lifting.
 
@@ -33,8 +36,8 @@ The goal is to build an agentic system powered by a highly constrained language 
 | **LLM (system under test)** | Qwen3-8B (≤8B constraint), thinking mode off, temperature 0 |
 | **LLM Server / Endpoint** | Ollama (local, `qwen3:8b-fp16`) OR the IIT course inference API (OpenAI-compatible, `Qwen/Qwen3-8B`: 8,192 tokens per call, max 1,024 output tokens, 1 concurrent request, 60 requests/min) |
 | **Evaluation Judge** | gemma3:27b on local Ollama (grades answers against the gold set; not part of the shipped system) |
-| **Agent Orchestration** | LangChain Python (For Tool Binding and RAG pipelines), LangGraph (agent graph) |
-| **Frontend UI** | Streamlit (For the final Week 4 demo interface) |
+| **Agent Orchestration** | LangChain Python (RAG pipeline). LangGraph not used under the v1.2 scope. |
+| **Frontend UI** | Streamlit chat UI (`ui.py`) over the RAG pipeline |
 | **Primary Dataset** | Prarabdha/indian-legal-supervised-fine-tuning-data (Hugging Face, Apache-2.0): Indian legal QA rows with `context`, `question`, `response` |
 | **Statute Dataset** | GSMS-B/indian-law-the-consumer-protection-act-2019 (Hugging Face, CC-BY-4.0): the Consumer Protection Act, 2019, section by section, plus the Gazette PDF |
 | **Data Format** | Question / Context / Answer (mentor requirement), stored as JSONL and CSV |
@@ -145,6 +148,8 @@ Reading 80 long answers by hand is slow and inconsistent, so (as agreed with the
 > * **Metrics:** Accuracy (correct / questions) for every category; Precision, Recall and F1 as a 3-class classifier for jurisdiction, as refuse-vs-answer for adversarial, and as token overlap with the gold answer for fact and deadline rows. Also latency, output tokens and truncation.  
 > * **Deliverable:** `results/baseline/*_evaluation_matrix.xlsx` and `*_report.md`. Scripts: `scripts/eval/`.
 
+> **v1.2:** this judge is replaced by judge v2 (Section 4, Step 7), and the baseline is re-graded with it so all runs compare like for like. The table below is the original Week 1 result.
+
 **Week 1 result (Qwen3-8B, no retrieval, no tools):**
 
 | Category | Questions | Accuracy | Precision | Recall | F1 |
@@ -166,6 +171,8 @@ Legal documents (like Supreme Court judgments) are too long for an 8B model's co
 
 > 4. **Action:** Use LangChain's ***RecursiveCharacterTextSplitter***.  
 > 5. **Experimentation Requirement:** Do not just pick one chunk size. Run an experiment testing at least two sizes (e.g., 500 tokens vs 1000 tokens) with a 100-token overlap.
+>
+> **As built:** only the `context` field of each master-set row is chunked; questions and answers are not indexed, because the gold questions come from the same rows and would otherwise be found by their own wording. Sizes compared: 256 and 500 BERT tokens, 100-token overlap. Each chunk keeps the ID of its master row.
 
 ### **Step 2: Dense Retrieval (Vector Embeddings)**
 
@@ -174,6 +181,8 @@ This step allows the system to find documents based on *meaning* rather than exa
 > 2. **Action:** Set up a local vector database using ChromaDB or FAISS.  
 > 3. **Action:** Use a high-quality embedding model from Hugging Face (e.g., BAAI/bge-base-en-v1.5 via LangChain's HuggingFaceEmbeddings class) to convert your text chunks into vectors.  
 > 4. **Limitation:** Dense retrieval is great for conceptual searches ("medical negligence"), but it frequently fails to find exact numbers (e.g., "Section 35" or "Case No. 402").
+>
+> **As built:** ChromaDB persisted on disk (`chroma_db/`), cosine distance. Embeddings: BAAI/bge-small-en-v1.5 on the course API (final runs); sentence-transformers/all-mpnet-base-v2 locally for development.
 
 ### **Step 3: Sparse Retrieval (BM25 Keyword Search)**
 
@@ -181,6 +190,8 @@ To fix the limitation of Dense Retrieval, we must implement a keyword-based sear
 
 > 3. **Action:** Implement LangChain's BM25Retriever on your document chunks.  
 > 4. **The Hybrid Merge:** Use LangChain's EnsembleRetriever to combine the results of both the Dense Retriever (vector DB) and the Sparse Retriever (BM25). Give them equal weight (50/50). This guarantees that queries with exact legal sections fetch the exact text.
+>
+> **As built:** BM25 tokenises on lower-case letters and digits, so "Section 35." and "section 35" match. BM25 and dense each return 10 chunks.
 
 ### **Step 4: Reranking**
 
@@ -188,6 +199,8 @@ When the Hybrid Retriever pulls the top 10 results, they are often slightly out 
 
 > * **Action:** Implement a reranker step using the FlashrankRerank or HuggingFaceCrossEncoder module in LangChain.  
 > * **Action:** Feed the combined results from the EnsembleRetriever into the reranker, and instruct it to return only the Top 3 most relevant chunks to feed into the LLM.
+>
+> **As built:** HuggingFaceCrossEncoder with cross-encoder/ms-marco-MiniLM-L-6-v2, top 3.
 
 ### **Step 5: Evaluating RAG (Recall@K)**
 
@@ -196,8 +209,33 @@ Track B requires that you measure how good your search engine is *separately* fr
 > * **Action:** Take the 30 "Fact/Info" queries from the Week 1 gold set.  
 > * **Action:** Without calling the LLM, pass these queries through your Hybrid Retriever. Check if the master row named in `gold_context_ids` (or a chunk of it) appears in the Top 3 results.  
 > * **Deliverable:** Calculate your Recall@3 percentage. If the RAG fetches the right document 90% of the time, but the LLM still gives the wrong answer, you have successfully isolated a "Reasoning Error" vs a "Retrieval Miss" for your Week 4 observability report\!
+>
+> **As built:** Recall@3 is measured over all 42 gold questions that name a gold passage (30 fact + 12 others), for BM25, dense, hybrid and hybrid + rerank, at both chunk sizes (`python -m copilot.recall`).
+
+### **Step 6: Prompt Styles × RAG (Experiment Grid)**
+
+The answering model is run on all 80 gold questions in six configurations, with temperature 0, seed 42 and at most 1,024 output tokens:
+
+| | Without RAG | With RAG (top 3 passages) |
+| :---- | :---- | :---- |
+| **Zero-shot** | Week 1 baseline | ✓ |
+| **Few-shot** (3 worked examples, none from the gold set) | ✓ | ✓ |
+| **Chain-of-thought** (reason step by step, end with "Final answer:") | ✓ | ✓ |
+
+With RAG, the three passages are numbered under `CONTEXT` above the question. Script: `python -m copilot.run --prompt zero|few|cot --rag off|on`.
+
+### **Step 7: Judge v2 and Metrics**
+
+> * **Judge v2 (mentor requirement):** gemma3:27b on local Ollama, temperature 0, JSON-schema output. It sees only the question, the gold answer and the response; it is **not told the question type**. It returns, in this order: type rationale → question type (jurisdiction, deadline or amount, fact, must refuse, procedure) → answer rationale → score 1–5, plus the final conclusion, failure type, whether it refused and whether it quoted outdated limits. Writing the reasoning before the score makes the score follow from it.  
+> * **Judge type accuracy:** the share of questions where the judge's type matches the gold label, showing whether it understood what it was grading.  
+> * **First metric layer (no LLM):** ROUGE-1/2/L against the gold answer, and exact match on Math/Logic questions (the commission, date or amount appears in the answer).  
+> * **Judge metrics:** mean score, strict accuracy (score 5), lenient accuracy (4–5), jurisdiction P/R/F1, safety P/R/F1 (refuse vs answer), outdated limits.  
+> * **Failure types:** Hallucination and Reasoning Error come from the judge; Retrieval Miss is set when a RAG answer scores below 5 and the gold passage was not in its top 3. Tool-call Error does not apply without an agent.  
+> * **Deliverable:** `results/week2/results_<mode>.xlsx` (Summary, By category, Per question, Definitions) and `.md`, from `python -m copilot.report`.
 
 ## **5\. Step-by-Step Execution Plan (Week 3: The Agentic Layer)**
+
+> **v1.2: out of scope.** The mentor narrowed the project to RAG on 20 Nov 2026. This section is kept for reference and as future work.
 
 Week 3 is the core engineering challenge of Track B. You must build a multi-agent system with persistent state, tool calling, and strict error handling to compensate for the 8B model's weaknesses.
 
@@ -228,6 +266,8 @@ Small models will fail. Implement retry logic in your graph:
 
 Week 4 focuses on proving your system works, making it safe, and deploying it with a user interface.
 
+> **v1.2:** the evaluation is Section 4, Steps 6–7. Of this section, the failure taxonomy (Step 2, without Tool-call Error), the safety boundary (Step 3) and the Streamlit UI (Step 4) are kept; tracing and the Dockerfile are optional.
+
 ### **Step 1: Tracing and Observability**
 
 > * **Action:** Create a free account on LangSmith or Langfuse.  
@@ -254,6 +294,10 @@ Run your full Agent against the Week 1 gold set of 80 queries and grade it with 
 > * **Action:** Build a clean chat interface using Streamlit (\`import streamlit as st\`).  
 > * **Caching:** Use Streamlit's @st.cache\_data decorator on your RAG retrieval function so identical legal queries don't waste LLM tokens.  
 > * **Rate Limiting:** Implement a simple session-state counter in Streamlit that limits users to 5 queries per session to simulate production rate-limiting.
+>
+> **As built (`streamlit run ui.py`):** a chat page over the RAG pipeline with a sidebar for mode, prompt style and RAG on/off, and an option to show the answer without RAG beside it. Each answer lists its three source passages. Phone numbers and e-mail addresses are scrubbed before the question reaches the model, the disclaimer is always shown, the retriever is cached (`st.cache_resource`) and search results with `st.cache_data`, and a session allows 5 questions.
+>
+> **UI only (not in the evaluation runs):** a topic check declines off-topic questions before any search, and a Python jurisdiction calculator (`copilot/jurisdiction.py`, the `Calculate_Jurisdiction` tool of Section 5 without the agent around it) decides the commission from the amount paid and gives the model that result as a fact. It was added because RAG alone did not fix jurisdiction: the corpus has the 2021 limits stripped, and the model miscompared amounts even when it stated the right limits.
 
 ### **Step 5: Containerization & Final Deliverables**
 

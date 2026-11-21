@@ -19,3 +19,5 @@ transformers>=4.40
 # Evaluation and results sheet
 rouge-score>=0.1.2
 openpyxl>=3.1
+# Chat UI (ui.py)
+streamlit>=1.40

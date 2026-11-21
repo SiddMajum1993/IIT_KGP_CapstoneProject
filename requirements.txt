@@ -1,0 +1,21 @@
+# Python 3.10+ (developed on 3.12). Install:  pip install -r requirements.txt
+# Data preparation (scripts/data_prep) only
+pandas>=2.0
+pyarrow>=14
+# LLM clients
+openai>=1.40
+httpx>=0.27
+# Retrieval
+langchain-core>=1.0,<2.0
+langchain-classic>=1.0,<2.0
+langchain-community>=0.4,<1.0
+langchain-chroma>=1.0,<2.0
+langchain-huggingface>=1.0,<2.0
+langchain-text-splitters>=1.0,<2.0
+chromadb>=1.0
+rank-bm25>=0.2.2
+sentence-transformers>=5.0
+transformers>=4.40
+# Evaluation and results sheet
+rouge-score>=0.1.2
+openpyxl>=3.1

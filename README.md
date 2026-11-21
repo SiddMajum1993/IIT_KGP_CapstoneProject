@@ -2,7 +2,7 @@
 
 IIT KGP Executive PG Programme (GenAI & Agentic AI) capstone, Track B.
 
-The Copilot is an agentic RAG assistant that answers procedural questions about Indian consumer law under the Consumer Protection Act, 2019. It runs on a small LLM (≤8B parameters; we use Qwen3-8B). Deterministic work such as pecuniary jurisdiction and deadline arithmetic is done in Python tools, and facts are grounded through retrieval. The full design is in [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>).
+The Copilot answers procedural questions about Indian consumer law under the Consumer Protection Act, 2019, on a small LLM (≤8B parameters; we use Qwen3-8B). This repository holds the gold evaluation set, a hybrid RAG pipeline (BM25 + dense retrieval, cross-encoder reranking), and an evaluation that compares three prompt styles (zero-shot, few-shot, chain-of-thought) with and without RAG. The full design is in [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>).
 
 > **Disclaimer:** this is a procedural advisor only. A qualified lawyer must review any legal action.
 
@@ -13,23 +13,30 @@ The Copilot is an agentic RAG assistant that answers procedural questions about 
 ```
 .
 ├── Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md
-├── .env.example                       # template for .env (endpoints, models, keys); copy and fill in
-├── scripts/
-│   ├── data_prep/
-│   │   ├── 01_extract_candidates.py   # scan raw Prarabdha shards -> consumer-law candidates
-│   │   ├── 02_build_master.py         # candidates + CPA 2019 -> 2,000-row master QA set
-│   │   └── 03_build_gold.py           # master -> 80-row gold evaluation set
-│   └── eval/
-│       ├── config.py                  # reads endpoints, models and keys from .env
-│       ├── run_baseline.py            # ask the model every gold question, log the answers
-│       ├── judge.py                   # LLM judge (gemma3:27b) grades each answer against the gold answer
-│       ├── judge_calibration.py       # check the judge on known-right / known-wrong answers
-│       ├── metrics.py                 # accuracy, precision, recall, F1 definitions
-│       ├── report.py                  # markdown report + per-question CSV
-│       └── export_matrix.py           # Excel evaluation matrix
+├── requirements.txt
+├── .env.example                       # template for .env (mode, endpoints, models, keys); copy and fill in
+├── app.py                             # prototype: one question, answered without and with RAG
+├── run_final.sh                       # the one-shot API session (index, Recall@3, all runs)
+├── copilot/
+│   ├── config.py                      # settings from .env; local / api mode switch
+│   ├── llm.py                         # one chat function for the answering model
+│   ├── prompts.py                     # zero-shot, few-shot and chain-of-thought prompts
+│   ├── rag.py                         # chunk -> embed -> Chroma -> BM25 + dense -> rerank to top 3
+│   ├── recall.py                      # Recall@3 of the retriever alone (no LLM)
+│   ├── run.py                         # ask every gold question with one prompt style, RAG on or off
+│   ├── judge.py                       # LLM judge: infers the question type, then scores 1-5
+│   ├── metrics.py                     # ROUGE, exact match, judge aggregates, P/R/F1, failure taxonomy
+│   └── report.py                      # results sheet (Excel + Markdown) across all runs
+├── tests/test_copilot.py              # checks for the deterministic parts (python -m unittest)
+├── docs/WALKTHROUGH.md                # how one question flows through the code
+├── scripts/data_prep/                 # builds the master and gold sets from the raw datasets
+│   ├── 01_extract_candidates.py       # scan raw Prarabdha shards -> consumer-law candidates
+│   ├── 02_build_master.py             # candidates + CPA 2019 -> 2,000-row master QA set
+│   └── 03_build_gold.py               # master -> 80-row gold evaluation set
 ├── results/
-│   ├── baseline/                      # Week 1 run: answers, verdicts, report, evaluation matrix
-│   └── judge_calibration/             # judge reliability check
+│   ├── baseline/                      # Week 1: bare Qwen3-8B (local Ollama and course API), judged
+│   └── week2/                         # Week 2: runs, judgements, Recall@3, results sheet
+├── chroma_db/                         # NOT in git; vector indexes, rebuilt on first use
 └── data/
     ├── raw/                           # NOT in git; rebuild with the steps below
     │   ├── prarabdha_indian_legal_sft/   # 33 parquet shards, ~8.5 GB
@@ -42,7 +49,7 @@ The Copilot is an agentic RAG assistant that answers procedural questions about 
         └── gold_qa.csv
 ```
 
-`data/processed/` (the 2,000-row master set and the 80-row gold set) is committed, so you can start on retrieval and evaluation straight after cloning. `data/raw/` and `data/interim/` are gitignored because they are large and can be regenerated. Follow the steps below to rebuild everything from the sources, for example to change a filter or check that a row is verbatim.
+`data/processed/` (the 2,000-row master set and the 80-row gold set) is committed, so you can start on retrieval and evaluation straight after cloning. `data/raw/` and `data/interim/` are gitignored because they are large and can be regenerated. Sections 2–4 rebuild everything from the sources, for example to change a filter or check that a row is verbatim.
 
 ---
 
@@ -50,11 +57,11 @@ The Copilot is an agentic RAG assistant that answers procedural questions about 
 
 | Requirement | Notes |
 |---|---|
-| Python 3.9+ | Developed on 3.9.6 |
-| `pandas`, `pyarrow` | Tested with pandas 2.3.3 and pyarrow 21.0.0 |
-| `curl` | Used for the downloads |
-| ~10 GB free disk | 8.5 GB for raw shards, plus a few hundred MB for derived files |
-| Network access to `huggingface.co` | **No account or token is needed**, since both datasets are public |
+| Python 3.10+ | Developed on 3.12 |
+| [Ollama](https://ollama.com) | Runs the judge (`gemma3:27b`, ~17 GB) and, in local mode, the answering model |
+| `curl` | Used for the dataset downloads |
+| ~10 GB free disk | 8.5 GB for raw shards (only needed to rebuild the data), plus models and indexes |
+| Network access to `huggingface.co` | For the datasets and the local embedding / reranker models. **No account or token is needed** |
 
 Set up a virtual environment:
 
@@ -63,13 +70,14 @@ git clone <repo-url> IIT_KGP_CapstoneProject
 cd IIT_KGP_CapstoneProject
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "pandas>=2.0" "pyarrow>=14"
+pip install -r requirements.txt
+ollama pull gemma3:27b
+cp .env.example .env     # then fill in your own values; .env is gitignored
 ```
 
-> All commands below are run from the **repo root**, because the scripts' default paths are relative to it.
+> All commands below are run from the **repo root**, because the default paths are relative to it.
 
 ---
-
 ## 2. Source datasets
 
 We treat both sources as ground truth. The pipeline **selects and reformats** rows. It does not rewrite their content (see [§5](#5-source-text-and-the-gold-set)).
@@ -263,129 +271,82 @@ Neither dataset contains the Consumer Protection (Jurisdiction of the District C
 | State | above ₹50 lakh, up to ₹2 crore |
 | National | above ₹2 crore |
 
-The Act's printed text (₹1 crore / ₹10 crore) and the 1986-era judgments (₹20 lakh / ₹1 crore) are both out of date. These limits therefore live **only in code**: the `Calculate_Jurisdiction` tool and `commission_for()` in stage 3. The LLM is never asked to recall them.
+The Act's printed text (₹1 crore / ₹10 crore) and the 1986-era judgments (₹20 lakh / ₹1 crore) are both out of date. These limits therefore live **only in code**, in `commission_for()` in stage 3, which sets the gold answers. The judge's guidelines state them too, so it can spot outdated limits in an answer.
 
 ---
 
-## 6. Evaluation
+## 6. Configuration: local and API mode
 
-Each run asks the model every gold question, then an LLM judge grades each answer against the gold answer. Install the extra packages first:
+Every script takes `--mode local` or `--mode api` (default: `COPILOT_MODE` in `.env`).
 
-```bash
-pip install "openai>=1.40" httpx openpyxl
-ollama pull qwen3:8b-fp16     # system under test (Week 1 baseline)
-ollama pull gemma3:27b        # judge, ~17 GB
-```
-
-**Configuration.** Endpoints, model names and keys live in `.env`, never in code. Start from the template and fill in your own values:
-
-```bash
-cp .env.example .env     # .env is gitignored; .env.example holds placeholders only
-```
-
-| Variable | Used for | Default |
+| | Local mode (development) | API mode (final runs) |
 |---|---|---|
-| `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL` | `--backend local` (Ollama) | `http://localhost:11434/v1`, `qwen3:8b-fp16` |
-| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` or `LLM_API_KEY_FILE`, `LLM_CA_CERT` | `--backend class` (course inference API) | none, `Qwen/Qwen3-8B` |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_API_KEY` or `EMBEDDING_API_KEY_FILE`, `EMBEDDING_CA_CERT` | Week 2 RAG (course embedding API) | none |
-| `JUDGE_BASE_URL`, `JUDGE_MODEL` | LLM judge (Ollama) | `http://localhost:11434`, `gemma3:27b` |
+| Answering model | `LOCAL_LLM_MODEL` on Ollama (default `gemma3:27b`) | `LLM_MODEL` on the course API (`Qwen/Qwen3-8B`, thinking off) |
+| Embeddings | `LOCAL_EMBEDDING_MODEL` (default `sentence-transformers/all-mpnet-base-v2`) | `EMBEDDING_MODEL` on the course API (`bge-small-en-v1.5`) |
+| Judge | `JUDGE_MODEL` on local Ollama (`gemma3:27b`) | same |
 
-Values left as `<placeholder>` count as unset. A `*_FILE` variable may point at a key file instead of pasting the key; if the file has a label before the key, the last field is used.
+The API URLs, keys (`*_API_KEY` or `*_API_KEY_FILE`) and CA certificates (`*_CA_CERT`) are read from `.env` at runtime and never written into code or results. Values left as `<placeholder>` count as unset. Every request uses `temperature=0`, `seed=42` and at most 1,024 output tokens (the course API's limit).
+
+---
+
+## 7. Retrieval (RAG)
+
+`copilot/rag.py`, on the 2,000-row master set:
+
+1. **Chunk.** Only each row's `context` (the passage from the judgment or the Act) is indexed. Questions and answers are not, because the gold questions come from the same rows and would otherwise be found by matching their own wording. Chunks are 256 or 500 BERT tokens with a 100-token overlap (`RecursiveCharacterTextSplitter`).
+2. **Embed.** The chunk vectors are stored in Chroma under `chroma_db/<mode>_<chunk size>/`, so they are computed once. An interrupted build resumes.
+3. **Search.** BM25 (exact terms such as "Section 35", matched on lower-case words and numbers) and dense search each return 10 chunks; `EnsembleRetriever` merges them 50/50.
+4. **Rerank.** `cross-encoder/ms-marco-MiniLM-L-6-v2` scores each (question, chunk) pair and keeps the top 3.
 
 ```bash
-# 1. Ask the model all 80 questions (resumable). --backend local or --backend class.
-python3 scripts/eval/run_baseline.py --backend local
-
-# 2. Check the judge: it must grade the gold answer "correct" and another question's answer "incorrect".
-python3 scripts/eval/judge_calibration.py
-
-# 3. Grade every answer (resumable).
-python3 scripts/eval/judge.py results/baseline/local_qwen3-8b-fp16.jsonl
-
-# 4. Build the report and the evaluation matrix.
-python3 scripts/eval/report.py results/baseline/local_qwen3-8b-fp16.jsonl
-python3 scripts/eval/export_matrix.py results/baseline/local_qwen3-8b-fp16.jsonl
+python -m copilot.rag --mode local                 # build the index, run one test query
+python -m copilot.recall --mode local              # Recall@3 for BM25 / dense / hybrid / rerank x 256 / 500 tokens
 ```
 
-**Judge.** `gemma3:27b` on local Ollama, temperature 0, with a JSON schema. Each category has its own rubric: the commission recommended (jurisdiction), the final date or amount (deadlines), the key point of the gold answer and context (fact), and whether prohibited content was produced (adversarial). For every answer the judge records the gold key point, the model's conclusion, a verdict (`correct` / `partial` / `incorrect`), a failure type from the taxonomy, whether the model refused, whether it stated outdated pecuniary limits, and a one-line rationale.
+Recall@3 is measured on the retriever alone, with no LLM, over the 42 gold questions that name a source passage (`gold_context_ids`). A hit means one of the top 3 chunks comes from that row.
 
-**Metrics** (`scripts/eval/metrics.py`):
+---
+
+## 8. Evaluation
+
+```bash
+# 1. Answers: one run per prompt style x RAG setting (resumable; failed rows are asked again)
+python -m copilot.run --mode local --prompt zero --rag off      # --prompt zero|few|cot  --rag on|off
+
+# 2. Judge every answer (resumable)
+python -m copilot.judge results/week2/local_zero_norag.jsonl
+
+# 3. Metrics for one run, or the results sheet across all judged runs
+python -m copilot.metrics results/week2/local_zero_norag.jsonl
+python -m copilot.report --mode local                           # results/week2/results_local.{xlsx,md}
+
+# Prototype: one question, answered without and with RAG
+python app.py --id G045
+python app.py "Can I appeal a District Commission order?"
+```
+
+**Prompt styles** (`copilot/prompts.py`): *zero-shot* is the Week 1 prompt; *few-shot* adds three worked examples (jurisdiction, statute, refusal) that are not gold questions; *chain-of-thought* asks for step-by-step reasoning and a final `Final answer:` line. With RAG on, the three retrieved passages go above the question.
+
+**Judge** (`copilot/judge.py`): `gemma3:27b` on local Ollama, temperature 0, output constrained by a JSON schema. The judge sees the question, the gold answer and the response, but **not the question type**. It must infer the type from its guidelines (jurisdiction, deadline/amount, fact, must refuse, procedure), then grade with that type's rules. Its output fields come in this order, so it reasons before it scores: `type_rationale`, `question_type`, `answer_rationale`, `score` (1–5), then `conclusion`, `failure_type`, `refused`, `outdated_limits`. Comparing `question_type` with the gold label gives the judge's type accuracy.
+
+**Metrics** (`copilot/metrics.py`):
 
 | Metric | Definition |
 |---|---|
-| Accuracy | Questions graded `correct` / questions. Lenient accuracy counts `partial` as half |
-| Precision / Recall / F1: jurisdiction | 3-class classification (District / State / National) of the commission the answer concludes with, macro-averaged |
-| Precision / Recall / F1: adversarial | Binary classification, positive class = refuse |
-| Precision / Recall / F1: fact, deadlines | Token overlap with the gold answer (SQuAD-style), averaged over questions |
+| ROUGE-1 / ROUGE-2 / ROUGE-L | F1 overlap with the gold answer. No LLM involved |
+| Exact match | Math/Logic only: the gold answer's key value (commission, date or amount) appears in the answer |
+| Judge score, strict / lenient accuracy | Mean score; share scored 5; share scored 4 or 5 |
+| Judge type accuracy | Share of questions where the judge's inferred type matches the gold set |
+| Jurisdiction P / R / F1 | District / State / National classification of the final recommendation, macro-averaged |
+| Safety P / R / F1 | Refuse vs answer over the adversarial questions, positive class = refuse |
+| Failure taxonomy | For answers scored below 5: Hallucination or Reasoning Error from the judge; Retrieval Miss when a RAG answer failed and the gold passage was not retrieved. Tool-call Error does not apply (no agent in this scope) |
 
-**Outputs** next to the run file:
+**Final API session.** The course APIs are reached in one session: `bash run_final.sh` checks both APIs, builds the API indexes, measures Recall@3 and runs the five remaining configurations (zero-shot without RAG is the Week 1 API baseline, reused). It then prints the local commands for judging and the results sheet.
 
-| File | Contents |
-|---|---|
-| `<run>_judged.jsonl` | One verdict per question |
-| `<run>_report.md` | Headline, sub-categories, safety, jurisdiction, failure taxonomy, cost, judge reliability, per-question table |
-| `<run>_report.csv` | Question, gold answer, model answer and verdict for every row |
-| `<run>_evaluation_matrix.xlsx` | Summary, Metrics, Matrix, Failure types, Jurisdiction, Safety, Judge check, Per question |
-
-**Week 1 baseline** (`qwen3:8b-fp16`, no retrieval, no tools): accuracy 19% overall (Math/Logic 10%, Fact 30%, Adversarial 15%). 13 of 20 jurisdiction answers state outdated limits, and the model drafted the legal notice in 7 of 8 notice and prompt-injection requests. Judge check: 97% on known-right and 97% on known-wrong answers, with no wrong answer graded correct.
-
-## 7. Roadmap
-
-| Week | Deliverable |
-|---|---|
-| 1 | Gold set + bare-model baseline graded by the LLM judge (done, see §6) |
-| 2 | Hybrid RAG (BM25 + `BAAI/bge-base-en-v1.5`, `EnsembleRetriever` 50/50, rerank top 10 → 3) with Recall@3 measured on the gold `fact` rows |
-| 3 | LangGraph Planner → Executor → Critic agent with `Query_Legal_Corpus`, `Calculate_Jurisdiction`, `Extract_Claim_Details`, and a 10-step cap |
-| 4 | Streamlit app (PII scrubbing, 5 queries per session, human-in-the-loop disclaimer) in a single Dockerfile |
+**Week 1 baseline** (`results/baseline/`, bare Qwen3-8B, no retrieval): judge v2 strict accuracy 16% on the course API and 23% on local Ollama (lenient 35% / 40%). 13 of 20 jurisdiction answers quote outdated limits, refusal recall is 0.28, and the judge identified the question type correctly on 77 of 80 questions.
 
 Final-run failures are classified as one of: **Retrieval Miss**, **Reasoning Error**, **Tool-call Error**, **Hallucination**.
 
-## LLM endpoint
-
-The app talks to an OpenAI-compatible endpoint:
-
-- **Local Ollama:** `LOCAL_LLM_BASE_URL` (default `http://localhost:11434/v1`); the client's `api_key="ollama"` is required by the library but ignored by the server. Model `qwen3:8b-fp16`; turn Qwen3 thinking off with `extra_body={"reasoning_effort": "none"}`.
-- **Course inference API** (`Qwen/Qwen3-8B`, vLLM-style): 8,192 tokens per call in total, at most 1,024 output tokens, one request at a time, 60 requests per minute. Turn thinking off with `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`. The URL, key and CA certificate go in `.env` (`LLM_*` variables), which is gitignored; never commit them.
-
-Use `temperature=0.0` for evaluation runs.
-
-## 8. Week 2: Hybrid RAG and Recall@3
-
-The retrieval pipeline uses the processed 2,000-row master QA set and the
-30 fact questions in the gold set. It compares 500-token and 1,000-token chunks
-with a 100-token overlap, indexes each experiment in persistent Chroma, combines
-dense retrieval with BM25 at equal weights, and reranks the top 10 candidates
-to return the top 3.
-
-Week 2 requires Python 3.10 or newer. Install its optional dependencies from
-the repository root:
-
-```powershell
-py -m pip install -r requirements-rag.txt
+```bash
+python -m unittest -v                                           # tests for the deterministic parts
 ```
-
-By default, the pipeline uses the Hugging Face `BAAI/bge-base-en-v1.5`
-embedding model and `BAAI/bge-reranker-base` cross-encoder. To use the course
-embedding API instead, copy `.env.example` to `.env` and set
-`EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and either `EMBEDDING_API_KEY` or
-`EMBEDDING_API_KEY_FILE`. Set `EMBEDDING_CA_CERT` to the CA certificate path
-when the endpoint requires it. Keep keys and certificates out of source
-control; `.env` and certificate/key files are gitignored.
-
-Run the chunk-size comparison and Recall@3 evaluation from the repository root:
-
-```powershell
-py scripts/rag/run_recall.py
-```
-
-To require the configured API embeddings explicitly:
-
-```powershell
-py scripts/rag/run_recall.py --embedding-backend api
-```
-
-The first run downloads the configured embedding and reranker models (unless
-the API embedding backend is selected) and creates local indexes under
-`chroma_db/`. The script can resume indexing missing chunks; use
-`--rebuild-index` to replace the experiment collections. It writes the
-per-query results and summary to `results/rag/`.

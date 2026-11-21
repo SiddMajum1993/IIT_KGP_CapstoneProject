@@ -71,6 +71,38 @@ class TestBM25Words(unittest.TestCase):
         self.assertEqual(bm25_words("Under Section 35(1), the NCDRC."), ["under", "section", "35", "1", "the", "ncdrc"])
 
 
+class TestJurisdiction(unittest.TestCase):
+    def test_boundaries(self):
+        from copilot.jurisdiction import CRORE, LAKH, commission_for
+        self.assertTrue(commission_for(50 * LAKH).startswith("District"))
+        self.assertTrue(commission_for(50 * LAKH + 1).startswith("State"))
+        self.assertTrue(commission_for(2 * CRORE).startswith("State"))
+        self.assertTrue(commission_for(2 * CRORE + 1).startswith("National"))
+
+    def test_amounts_in_different_spellings(self):
+        from copilot.jurisdiction import consideration_paid
+        for text, value in [("worth 1cr", 10_000_000), ("₹1.2 crore", 12_000_000), ("Rs 75 lakhs", 7_500_000),
+                            ("₹50,00,001", 5_000_001), ("35 lakh rupees", 3_500_000), ("INR 80,000", 80_000)]:
+            self.assertEqual(consideration_paid(text), value, text)
+
+    def test_no_amount_or_unclear_amount(self):
+        from copilot.jurisdiction import consideration_paid
+        self.assertIsNone(consideration_paid("I bought it in 2015 and have 3 bills"))
+        self.assertIsNone(consideration_paid("₹40 lakh for the flat and ₹15 lakh for interiors"))
+        self.assertIsNone(consideration_paid("I paid ₹40 lakh and then ₹15 lakh more"))
+
+    def test_paid_amount_wins_over_compensation_and_market_value(self):
+        from copilot.jurisdiction import consideration_paid
+        self.assertEqual(consideration_paid("I paid ₹1.8 crore and claim ₹1 crore compensation"), 18_000_000)
+        self.assertEqual(consideration_paid("I paid ₹40 lakh in 2015 and it is worth ₹1.5 crore today"), 4_000_000)
+
+    def test_every_gold_jurisdiction_question(self):
+        from copilot.jurisdiction import commission_for, consideration_paid
+        for g in GOLD:
+            if g["subtype"] == "jurisdiction":
+                self.assertTrue(g["answer"].startswith(commission_for(consideration_paid(g["question"]))), g["id"])
+
+
 class TestScrub(unittest.TestCase):
     def test_phone_and_email_are_removed(self):
         self.assertEqual(scrub("call 98765 43210 or +91-9876543210, mail a.b@x.com"),

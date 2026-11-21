@@ -16,6 +16,7 @@ The Copilot answers procedural questions about Indian consumer law under the Con
 ├── requirements.txt
 ├── .env.example                       # template for .env (mode, endpoints, models, keys); copy and fill in
 ├── app.py                             # prototype: one question, answered without and with RAG
+├── ui.py                              # Streamlit chat UI over the RAG pipeline
 ├── run_final.sh                       # the one-shot API session (index, Recall@3, all runs)
 ├── copilot/
 │   ├── config.py                      # settings from .env; local / api mode switch
@@ -350,3 +351,16 @@ Final-run failures are classified as one of: **Retrieval Miss**, **Reasoning Err
 ```bash
 python -m unittest -v                                           # tests for the deterministic parts
 ```
+
+## 9. Chat UI
+
+```bash
+streamlit run ui.py                                             # opens http://localhost:8501
+```
+
+`ui.py` is a chat page over the same pipeline. The sidebar chooses the mode (local / api), the prompt style and RAG on/off, and can show the answer without RAG next to the RAG answer. Each answer lists the three passages it was given. Phone numbers and e-mail addresses are removed before the question reaches the model, the disclaimer is always on screen, and a session allows 5 questions. The retriever is built once per server (`st.cache_resource`) and search results are cached (`st.cache_data`).
+
+Two steps run only in the UI, so the evaluation runs (`copilot/run.py`) still measure RAG alone:
+
+- **Topic check.** One short model call decides whether the question is about Indian consumer rights. If it is not, the UI replies with a fixed sentence and does not search the corpus.
+- **Jurisdiction calculator** (`copilot/jurisdiction.py`, the PRD's `Calculate_Jurisdiction`). If the question names the amount paid ("1cr", "₹60 lakh", "₹50,00,001"), Python decides the commission under the 2021 Rules, and the model is given that result as a fact instead of doing the comparison itself. With several amounts it uses the one marked as paid when the others are clearly compensation or a later value; otherwise it does nothing. It can be switched off in the sidebar to show the model on its own.

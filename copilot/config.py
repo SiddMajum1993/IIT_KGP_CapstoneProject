@@ -11,7 +11,7 @@ Values still holding a placeholder such as <your-api-key> are treated as unset.
 import os
 
 DEFAULTS = {
-    "COPILOT_MODE": "local",
+    "COPILOT_MODE": "api",
     # local mode
     "LOCAL_LLM_BASE_URL": "http://localhost:11434/v1",
     "LOCAL_LLM_MODEL": "gemma3:27b",

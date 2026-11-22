@@ -10,7 +10,7 @@
                EnsembleRetriever merges the two lists with equal weight.
   4. Rerank  - a cross-encoder (ms-marco-MiniLM-L-6-v2) reads each (question, chunk) pair and keeps the best 3.
 
-Usage: python -m copilot.rag --mode local    builds the index (if needed) and answers one test query.
+Usage: python -m copilot.rag --mode api    builds the index (if needed) and answers one test query.
 """
 import argparse
 import json

@@ -278,7 +278,7 @@ The Act's printed text (₹1 crore / ₹10 crore) and the 1986-era judgments (�
 
 ## 6. Configuration: local and API mode
 
-Every script takes `--mode local` or `--mode api` (default: `COPILOT_MODE` in `.env`).
+Every script takes `--mode api` or `--mode local`. The default is `COPILOT_MODE` in `.env`, or `api` when it is not set.
 
 | | Local mode (development) | API mode (final runs) |
 |---|---|---|
@@ -300,8 +300,8 @@ The API URLs, keys (`*_API_KEY` or `*_API_KEY_FILE`) and CA certificates (`*_CA_
 4. **Rerank.** `cross-encoder/ms-marco-MiniLM-L-6-v2` scores each (question, chunk) pair and keeps the top 3.
 
 ```bash
-python -m copilot.rag --mode local                 # build the index, run one test query
-python -m copilot.recall --mode local              # Recall@3 for BM25 / dense / hybrid / rerank x 256 / 500 tokens
+python -m copilot.rag --mode api                   # build the index, run one test query
+python -m copilot.recall --mode api                # Recall@3 for BM25 / dense / hybrid / rerank x 256 / 500 tokens
 ```
 
 Recall@3 is measured on the retriever alone, with no LLM, over the 42 gold questions that name a source passage (`gold_context_ids`). A hit means one of the top 3 chunks comes from that row.
@@ -312,14 +312,14 @@ Recall@3 is measured on the retriever alone, with no LLM, over the 42 gold quest
 
 ```bash
 # 1. Answers: one run per prompt style x RAG setting (resumable; failed rows are asked again)
-python -m copilot.run --mode local --prompt zero --rag off      # --prompt zero|few|cot  --rag on|off
+python -m copilot.run --mode api   --prompt zero --rag off      # --prompt zero|few|cot  --rag on|off
 
 # 2. Judge every answer (resumable)
-python -m copilot.judge results/week2/local_zero_norag.jsonl
+python -m copilot.judge results/week2/api_zero_norag.jsonl
 
 # 3. Metrics for one run, or the results sheet across all judged runs
-python -m copilot.metrics results/week2/local_zero_norag.jsonl
-python -m copilot.report --mode local                           # results/week2/results_local.{xlsx,md}
+python -m copilot.metrics results/week2/api_zero_norag.jsonl
+python -m copilot.report --mode api                             # results/week2/results_api.{xlsx,md}
 
 # Prototype: one question, answered without and with RAG
 python app.py --id G045

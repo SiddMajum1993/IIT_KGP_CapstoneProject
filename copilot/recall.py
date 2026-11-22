@@ -4,7 +4,7 @@ For every gold question that names a source passage (gold_context_ids), a method
 top 3 chunks comes from that master-set row. Measured for each method (BM25, dense, hybrid, hybrid + rerank)
 and each chunk size, so a retrieval miss can be told apart from a reasoning error later.
 
-Usage:  python -m copilot.recall --mode local
+Usage:  python -m copilot.recall --mode api
 Output: results/week2/recall_<mode>.md and .jsonl
 """
 import argparse

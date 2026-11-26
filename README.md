@@ -1,12 +1,99 @@
 # Indian Consumer Rights Copilot
 
-IIT KGP Executive PG Programme (GenAI & Agentic AI) capstone, Track B.
+**A chat assistant that answers questions about Indian consumer law, grounded in the Consumer Protection Act, 2019 and consumer-commission judgments, running on a small (≤ 8B parameter) language model.**
 
-The Copilot answers procedural questions about Indian consumer law under the Consumer Protection Act, 2019, on a small LLM (≤8B parameters; we use Qwen3-8B). This repository holds the gold evaluation set, a hybrid RAG pipeline (BM25 + dense retrieval, cross-encoder reranking), and an evaluation that compares three prompt styles (zero-shot, few-shot, chain-of-thought) with and without RAG. The full design is in [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>).
+Capstone project for the IIT Kharagpur Executive PG Programme in Generative AI & Agentic AI (Track B).
 
-> **Disclaimer:** this is a procedural advisor only. A qualified lawyer must review any legal action.
+> [!IMPORTANT]
+> **This is not legal advice.** The Copilot is a procedural advisor for learning and research. It can be wrong. A qualified lawyer must review any legal action you take. It will not draft legal notices, predict the outcome of a case, or promise a result.
 
 ---
+
+## Why this project
+
+Someone with a defective product, a refused refund or a flat that was never delivered usually searches the web, reads forums or asks a general chatbot. The answers rarely cite a source, often quote the repealed 1986 Act, and get the filing commission wrong. Consumer law needs three things to be right:
+
+1. **The right commission.** Under the 2021 Rules, a complaint goes to the District Commission up to ₹50 lakh, the State Commission up to ₹2 crore, and the National Commission above that.
+2. **Checkable facts.** Section numbers, deadlines, deposits and case holdings must match the 2019 Act and real judgments.
+3. **A clear advisory boundary.** No drafting of notices, no predicting outcomes and no guarantees.
+
+Small models are cheap and private to run, but on their own they get all three wrong. This project measures how much **retrieval-augmented generation (RAG)** fixes, and where deterministic code is still needed.
+
+## What it does
+
+- **Answers from sources.** For each question, hybrid search (keyword BM25 + semantic embeddings, then a cross-encoder reranker) finds the 3 most relevant passages from a 2,000-passage consumer-law corpus. The model answers from them, and the UI shows the passages so you can check them.
+- **Computes jurisdiction in Python.** If the question mentions the amount paid, a small calculator applies the 2021 limits and gives the model the answer as a fact. The model never does the arithmetic.
+- **Stays in scope.** A topic check turns away off-topic questions, phone numbers and e-mail addresses are removed before anything reaches the model, every answer carries the disclaimer, and each session is limited to 5 questions.
+
+```mermaid
+flowchart LR
+    Q[Question] --> T{Topic check}
+    T -- off-topic --> X[Polite decline]
+    T -- consumer law --> S[Hybrid search<br/>BM25 + dense → rerank → top 3]
+    S --> J[Jurisdiction calculator<br/>Python, 2021 Rules]
+    J --> M[Qwen3-8B answer<br/>+ sources + disclaimer]
+```
+
+## Results at a glance
+
+Evaluated on an 80-question evaluation set (30 jurisdiction and deadline questions, 30 questions on the Act and judgments, 20 that must be refused or answered), with Qwen3-8B. Full tables: [`results/week2/results_api.md`](results/week2/results_api.md) (spreadsheet: [`results_api.xlsx`](results/week2/results_api.xlsx)).
+
+| Prompt style | Fully correct, no RAG → RAG | Hallucinations, no RAG → RAG |
+|---|---|---|
+| Zero-shot | 16% → 29% | 24 → 21 |
+| Few-shot | 24% → **46%** | 22 → **9** |
+| Chain-of-thought | 28% → 44% | 22 → 18 |
+
+- **Search finds the right passage** in the top 3 for 81% of questions that have one (93% of fact questions), measured on the retriever alone.
+- **RAG fixes facts.** Questions on the 2019 Act go from 10–20% to up to 100% correct, and questions on judgments from 35–70% to up to 90%.
+- **RAG does not fix jurisdiction or refusals** (≤ 25% and ≤ 28% correct). This is why jurisdiction is computed in Python, and why a refusal guardrail is the next step.
+
+## Quick start
+
+You need Python 3.10+ and about 2 GB of disk. The corpus and the evaluation set are in the repo, so there is nothing to download before you start.
+
+```bash
+git clone https://github.com/SiddMajum1993/IIT_KGP_CapstoneProject.git
+cd IIT_KGP_CapstoneProject
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # your settings; .env is gitignored and never committed
+```
+
+Then choose where the model runs:
+
+- **Course API (`COPILOT_MODE=api`, the default).** Qwen3-8B and the embedding model on the course's inference servers. These are only available to enrolled learners, who put their own endpoint, key and certificate in `.env`.
+- **On your own machine (`COPILOT_MODE=local`).** Install [Ollama](https://ollama.com), pull a model of 8B parameters or fewer (for example `ollama pull llama3.1:8b`) and set `LOCAL_LLM_MODEL` to it in `.env`. Embeddings use a free Hugging Face model, with no account or token needed.
+
+Start the chat page:
+
+```bash
+streamlit run ui.py             # opens http://localhost:8501
+```
+
+The first start builds the search index, which takes several minutes. After that the page loads in seconds.
+
+## How to read this repository
+
+| If you want to… | Look at |
+|---|---|
+| Understand the design and the decisions behind it | [`Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md`](<Product Requirements Document (PRD)_ Indian Consumer Rights Copilot.md>) |
+| Follow one question through the code | [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) |
+| See the results | [`results/week2/results_api.md`](results/week2/results_api.md), [`results/baseline/`](results/baseline/) |
+| Browse the data | [`data/processed/`](data/processed/): the 2,000-row corpus (`master_qa.jsonl`) and the 80-question evaluation set (`gold_qa.csv`) |
+| Rebuild everything from the raw datasets | Sections 1–9 below |
+
+## Acknowledgements and data licences
+
+- [Prarabdha / indian-legal-supervised-fine-tuning-data](https://huggingface.co/datasets/Prarabdha/indian-legal-supervised-fine-tuning-data) (Apache-2.0): judgment passages and question–answer pairs.
+- [GSMS-B / indian-law-the-consumer-protection-act-2019](https://huggingface.co/datasets/GSMS-B/indian-law-the-consumer-protection-act-2019) (CC-BY-4.0): text of the Consumer Protection Act, 2019.
+- Models: Qwen3-8B (answers), bge-small-en-v1.5 and all-mpnet-base-v2 (embeddings), ms-marco-MiniLM-L-6-v2 (reranker), gemma3:27b (evaluation judge).
+
+The passages are reproduced from these public datasets for research and education. They are not a complete or authoritative statement of the law.
+
+---
+
+# Technical details
 
 ## Repository layout
 
@@ -59,22 +146,12 @@ The Copilot answers procedural questions about Indian consumer law under the Con
 | Requirement | Notes |
 |---|---|
 | Python 3.10+ | Developed on 3.12 |
-| [Ollama](https://ollama.com) | Runs the judge (`gemma3:27b`, ~17 GB) and, in local mode, the answering model |
+| [Ollama](https://ollama.com) | Runs the evaluation judge (`gemma3:27b`, ~17 GB) and, in local mode, the answering model. Not needed to use the chat page in API mode |
 | `curl` | Used for the dataset downloads |
 | ~10 GB free disk | 8.5 GB for raw shards (only needed to rebuild the data), plus models and indexes |
 | Network access to `huggingface.co` | For the datasets and the local embedding / reranker models. **No account or token is needed** |
 
-Set up a virtual environment:
-
-```bash
-git clone <repo-url> IIT_KGP_CapstoneProject
-cd IIT_KGP_CapstoneProject
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-ollama pull gemma3:27b
-cp .env.example .env     # then fill in your own values; .env is gitignored
-```
+Set up the environment as in [Quick start](#quick-start). To run the evaluation judge, also run `ollama pull gemma3:27b`.
 
 > All commands below are run from the **repo root**, because the default paths are relative to it.
 
@@ -225,8 +302,8 @@ Every script takes `--help` and accepts path overrides.
 
 | Category | Rows | What it tests | How the answer is checked |
 |---|---|---|---|
-| `math_logic` / `jurisdiction` | 20 | Pecuniary jurisdiction, incl. boundary values (₹50 lakh, ₹2 crore) and traps (1986 limits, the Act's printed limits, market value vs consideration paid) The commission under the 2021 limits (`commission_for()`). No context; `expected_behavior` is `tool:Calculate_Jurisdiction` |
-| `math_logic` / `deadline_or_amount` | 10 | Appeal deadlines, limitation period, pre-deposit amounts The date or amount under the cited CPA section, whose text is the context |
+| `math_logic` / `jurisdiction` | 20 | Pecuniary jurisdiction, incl. boundary values (₹50 lakh, ₹2 crore) and traps (1986 limits, the Act's printed limits, market value vs consideration paid) | The commission under the 2021 limits (`commission_for()`). No context; `expected_behavior` is `tool:Calculate_Jurisdiction` |
+| `math_logic` / `deadline_or_amount` | 10 | Appeal deadlines, limitation period, pre-deposit amounts | The date or amount under the cited CPA section, whose text is the context |
 | `fact` | 30 | Questions about the Act (10) and judgments (20) across topics | **Copied verbatim from master rows** (question, context and answer of the same row). `gold_context_ids` names that row, so Recall@3 can be scored on the retriever alone without calling the LLM |
 | `adversarial` | 20 | Drafting notices, predicting outcomes, guaranteed advice, prompt injection, illegal requests (18 refusals) plus 2 control questions that must be answered | Expected behaviour (`refuse` / `answer`) |
 

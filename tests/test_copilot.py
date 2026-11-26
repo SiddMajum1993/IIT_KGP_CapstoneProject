@@ -96,6 +96,18 @@ class TestJurisdiction(unittest.TestCase):
         self.assertEqual(consideration_paid("I paid ₹1.8 crore and claim ₹1 crore compensation"), 18_000_000)
         self.assertEqual(consideration_paid("I paid ₹40 lakh in 2015 and it is worth ₹1.5 crore today"), 4_000_000)
 
+    def test_named_commission(self):
+        from copilot.jurisdiction import named_commission
+        wrong = ("You should approach the **National Consumer Disputes Redressal Commission** because ₹1.5 crore "
+                 "exceeds the ₹2 crore limit for the State Commission.")
+        self.assertEqual(named_commission(wrong), "National")
+        self.assertEqual(named_commission("File before the State Consumer Disputes Redressal Commission (SCDRC)."),
+                         "State")
+        self.assertEqual(named_commission("Under the Consumer Protection (Jurisdiction of the District Commission, "
+                                          "the State Commission and the National Commission) Rules, 2021, go to "
+                                          "the District Commission."), "District")
+        self.assertIsNone(named_commission("Keep your receipts and contact the seller first."))
+
     def test_every_gold_jurisdiction_question(self):
         from copilot.jurisdiction import commission_for, consideration_paid
         for g in GOLD:

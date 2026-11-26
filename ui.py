@@ -7,6 +7,7 @@ Run:  streamlit run ui.py
 - A topic check runs first: an off-topic question gets a fixed reply, with no search and no passages.
 - Jurisdiction calculator (copilot/jurisdiction.py): if the question names the amount paid, Python decides the
   commission under the 2021 Rules and the model is given that result as a fact, so it does not do the arithmetic.
+  If the answer still names a different commission, a correction is shown under it.
 - The answer is streamed, so it appears as the model writes it, and is asked to stay within about 150 words.
 - At most 5 questions per session, as the PRD requires.
 """
@@ -50,10 +51,11 @@ def is_on_topic(mode: str, question: str) -> bool:
 def stream_answer(mode: str, style: str, question: str, passages: list, fact: str = None) -> dict:
     """Write the model's answer to the page as it arrives; return it for the chat history."""
     client, model, extra_body = llm.make_client(mode)
-    messages = prompts.build_messages(question, style, passages or None)
+    # The calculator's result goes just before the question, after any passages, so it is the last thing the
+    # model reads; passages that quote the Act's original limits come before it.
+    asked = f"{fact}\n\n{question}" if fact else question
+    messages = prompts.build_messages(asked, style, passages or None)
     messages[0] = dict(role="system", content=f"{messages[0]['content']} {UI_RULES}")
-    if fact:  # the calculator's result goes first in the question, above any passages
-        messages[-1] = dict(role="user", content=f"{fact}\n\n{messages[-1]['content']}")
     start = time.perf_counter()
     try:
         text = st.write_stream(llm.stream(client, model, extra_body, messages))
@@ -61,6 +63,16 @@ def stream_answer(mode: str, style: str, question: str, passages: list, fact: st
         text = f"Error from the model: {e}"
         st.error(text)
     return dict(model=model, text=text, latency=round(time.perf_counter() - start, 1))
+
+
+def check_against_calculator(answer: dict, value) -> None:
+    """If the model names a different commission from the calculator, say so under the answer."""
+    if value is None or not answer:
+        return
+    named, correct = jurisdiction.named_commission(answer["text"]), jurisdiction.commission_for(value)
+    if named and not correct.startswith(named):
+        st.error(f"⚠️ This answer names the {named} Commission, which contradicts the calculator. Under the "
+                 f"2021 Rules, {jurisdiction.rupees(value)} paid goes to the {correct}.")
 
 
 def show_sources(sources: list) -> None:
@@ -83,12 +95,14 @@ def show_turn(turn: dict) -> None:
             st.info(f"🧮 {turn['fact_short']}")
         shown = turn["rag"] or turn["plain"]
         st.markdown(shown["text"])
+        check_against_calculator(shown, turn.get("value"))
         st.caption(f"{shown['model']} · {shown['latency']}s · {'with' if turn['rag'] else 'without'} RAG")
         if turn["rag"]:
             show_sources(turn["sources"])
         if turn["rag"] and turn["plain"]:
             with st.expander("Answer without RAG (for comparison)"):
                 st.markdown(turn["plain"]["text"])
+                check_against_calculator(turn["plain"], turn.get("value"))
 
 
 def main() -> None:
@@ -146,14 +160,16 @@ def main() -> None:
                               state="complete")
         rag_answer = stream_answer(mode, style, question, [t for _, t in sources], fact) if use_rag else None
         if rag_answer:
+            check_against_calculator(rag_answer, value)
             show_sources(sources)
         plain = None
         if not use_rag or compare:
             if use_rag:
                 st.markdown("**Answer without RAG (for comparison)**")
             plain = stream_answer(mode, style, question, [], fact)
+            check_against_calculator(plain, value)
     st.session_state.turns.append(dict(question=question, sources=sources, rag=rag_answer, plain=plain,
-                                       fact=fact, fact_short=fact_short))
+                                       fact=fact, fact_short=fact_short, value=value))
     st.rerun()
 
 

@@ -73,4 +73,20 @@ def jurisdiction_fact(value: int) -> str:
     return (f"JURISDICTION (computed by a calculator under the Consumer Protection (Jurisdiction) Rules, 2021; "
             f"state it as given and do not recalculate): the consideration paid is {rupees(value)}, so the "
             f"complaint goes to the {commission_for(value)}. Limits: District up to ₹50 lakh; State above ₹50 lakh "
-            f"and up to ₹2 crore; National above ₹2 crore.")
+            f"and up to ₹2 crore; National above ₹2 crore. Start the answer by naming this commission.")
+
+
+# The full title of the 2021 Rules names all three commissions, so it is removed before looking for a commission.
+RULES_TITLE = re.compile(r"jurisdiction of the district commission,? the state commission and the national commission")
+LEVELS = (("District", r"\bdistrict\b|\bdcdrc\b"), ("State", r"\bstate\b|\bscdrc\b"),
+          ("National", r"\bnational\b|\bncdrc\b"))
+
+
+def named_commission(answer: str):
+    """The commission the answer names first ("District", "State" or "National"), or None if it names none.
+
+    The answer is asked to start with its recommendation, so the first commission named is taken as that.
+    """
+    text = RULES_TITLE.sub(" ", (answer or "").lower())
+    hits = [(m.start(), level) for level, pat in LEVELS for m in [re.search(pat, text)] if m]
+    return min(hits)[1] if hits else None
